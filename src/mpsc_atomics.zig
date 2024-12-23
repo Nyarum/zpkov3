@@ -25,7 +25,6 @@ pub fn Channel(comptime T: type, bound: usize) type {
 
         pub fn pop(self: *Self) ?T {
             const tail = self.tail.load(.acquire);
-            defer std.debug.print("Tail {any}\n", .{tail});
             const head = self.head.load(.acquire);
 
             if (tail >= head) {

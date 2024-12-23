@@ -26,7 +26,6 @@ pub fn on_data(buf: []const u8, client: *tcp.Buffer) !void {
     switch (opcode) {
         .auth => {
             const auth = try packet.Auth.decode(header.data);
-
             _ = auth;
 
             // Send characters screen
@@ -42,6 +41,10 @@ pub fn on_data(buf: []const u8, client: *tcp.Buffer) !void {
             std.debug.print("Sending characters screen {any}\n", .{pkt});
 
             try client.push(pkt);
+        },
+        .exit => {
+            std.debug.print("Client exited account\n", .{});
+            return error.Exit;
         },
         else => {},
     }

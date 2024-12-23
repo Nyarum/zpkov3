@@ -117,7 +117,14 @@ pub fn init(host: []const u8, port: u16, on_connection: anytype, on_data: anytyp
                     const bytes_read: usize = @intCast(cqe.res);
 
                     var channel = Buffer{};
-                    try on_data(ctx.buffer[0..bytes_read], &channel);
+                    on_data(ctx.buffer[0..bytes_read], &channel) catch |err| {
+                        if (err == error.Exit) {
+                            posix.close(ctx.fd);
+                            allocator.free(ctx.buffer);
+                            allocator.destroy(ctx);
+                            continue;
+                        }
+                    };
                     const resp = channel.pop();
 
                     if (resp) |resp_buf| {
@@ -148,7 +155,7 @@ pub fn init(host: []const u8, port: u16, on_connection: anytype, on_data: anytyp
             .send => {
                 if (cqe.res >= 0) {
                     // Send completed
-                    print("Sent {} bytes\n", .{cqe.res});
+                    //print("Sent {} bytes\n", .{cqe.res});
                 }
                 // Clean up send context
                 allocator.free(ctx.buffer);
