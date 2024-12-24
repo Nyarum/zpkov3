@@ -23,6 +23,8 @@ pub fn on_data(buf: []const u8, client: *tcp.Buffer) !void {
 
     const opcode: packet.Opcode = @enumFromInt(header.opcode);
 
+    var fbs = std.io.fixedBufferStream(header.data);
+
     switch (opcode) {
         .auth => {
             const auth = try packet.Auth.decode(header.data);
@@ -42,16 +44,25 @@ pub fn on_data(buf: []const u8, client: *tcp.Buffer) !void {
 
             try client.push(pkt);
         },
+        .create_character => {
+            const create_character = try packet.CharacterCreate.decode(&fbs);
+
+            std.debug.print("Creating character {any}\n", .{create_character});
+
+            var reply = try (packet.CharacterCreateReply{
+                .error_code = 0,
+            }).encode();
+
+            const pkt = try packet.pack(@intFromEnum(packet.Opcode.create_character_reply), reply.getWritten());
+
+            try client.push(pkt);
+        },
         .exit => {
             std.debug.print("Client exited account\n", .{});
             return error.Exit;
         },
         else => {},
     }
-
-    std.debug.print("Hello from server {any}\n", .{buf});
-
-    try client.push(&[_]u8{ 0x00, 0x00 });
 }
 
 pub fn main() !void {

@@ -66,9 +66,14 @@ pub const CustomWriter = struct {
         try self.writer.writeAll(bytes);
     }
 
-    pub fn writeString(self: *CustomWriter, str: []const u8) !void {
+    pub fn writeString(self: *CustomWriter, str: CompositeString) !void {
         try self.writer.writeInt(u16, @intCast(str.len), .big);
-        try self.writer.writeAll(str);
+        try self.writer.writeAll(str.get());
+    }
+
+    pub fn writeBytes(self: *CustomWriter, bytes: []const u8) !void {
+        try self.writer.writeInt(u16, @intCast(bytes.len), .big);
+        try self.writer.writeAll(bytes);
     }
 };
 
@@ -129,6 +134,10 @@ pub const Auth = struct {
     }
 };
 
+fn intToBool(value: anytype) bool {
+    return if (value == 1) true else false;
+}
+
 const ItemAttr = struct {
     attr: u16,
     is_init: bool,
@@ -142,6 +151,19 @@ const ItemAttr = struct {
         try writer.writeInt(u8, @intFromBool(self.is_init), .big);
 
         return fbs.getWritten();
+    }
+
+    pub fn decode(fbs: *std.io.FixedBufferStream([]const u8)) !ItemAttr {
+        var reader = fbs.reader().any();
+
+        const attr = try reader.readInt(u16, .big);
+        const is_init = try reader.readInt(u8, .big);
+        const is_init_bool = intToBool(is_init);
+
+        return ItemAttr{
+            .attr = attr,
+            .is_init = is_init_bool,
+        };
     }
 };
 
@@ -158,6 +180,18 @@ const InstAttr = struct {
         try writer.writeInt(u16, self.value, .big);
 
         return fbs.getWritten();
+    }
+
+    pub fn decode(fbs: *std.io.FixedBufferStream([]const u8)) !InstAttr {
+        var reader = fbs.reader().any();
+
+        const id = try reader.readInt(u16, .big);
+        const value = try reader.readInt(u16, .big);
+
+        return InstAttr{
+            .id = id,
+            .value = value,
+        };
     }
 };
 
@@ -199,6 +233,54 @@ const ItemGrid = struct {
 
         return fbs.getWritten();
     }
+
+    pub fn decode(fbs: *std.io.FixedBufferStream([]const u8)) !ItemGrid {
+        var reader = fbs.reader().any();
+
+        const id = try reader.readInt(u16, .big);
+        const num = try reader.readInt(u16, .big);
+
+        var endure: [2]u16 = undefined;
+        for (0..2) |i| {
+            endure[i] = try reader.readInt(u16, .big);
+        }
+
+        var energy: [2]u16 = undefined;
+        for (0..2) |i| {
+            energy[i] = try reader.readInt(u16, .big);
+        }
+
+        const forge_lv = try reader.readInt(u8, .big);
+
+        var db_params: [2]u32 = undefined;
+        for (0..2) |i| {
+            db_params[i] = try reader.readInt(u32, .big);
+        }
+
+        var inst_attrs: [5]InstAttr = undefined;
+        for (0..5) |i| {
+            inst_attrs[i] = try InstAttr.decode(fbs);
+        }
+
+        var item_attrs: [40]ItemAttr = undefined;
+        for (0..40) |i| {
+            item_attrs[i] = try ItemAttr.decode(fbs);
+        }
+
+        const is_change = try reader.readInt(u8, .big) != 0;
+
+        return ItemGrid{
+            .id = id,
+            .num = num,
+            .endure = endure,
+            .energy = energy,
+            .forge_lv = forge_lv,
+            .db_params = db_params,
+            .inst_attrs = inst_attrs,
+            .item_attrs = item_attrs,
+            .is_change = is_change,
+        };
+    }
 };
 
 const Look = struct {
@@ -220,6 +302,27 @@ const Look = struct {
         try writer.writeInt(u16, self.hair, .big);
 
         return fbs.getWritten();
+    }
+
+    pub fn decode(fbs: *std.io.FixedBufferStream([]const u8)) !Look {
+        var reader = fbs.reader().any();
+
+        const ver = try reader.readInt(u16, .big);
+        const type_id = try reader.readInt(u16, .big);
+
+        var item_grids: [10]ItemGrid = undefined;
+        for (0..10) |i| {
+            item_grids[i] = try ItemGrid.decode(fbs);
+        }
+
+        const hair = try reader.readInt(u16, .big);
+
+        return Look{
+            .ver = ver,
+            .type_id = type_id,
+            .item_grids = item_grids,
+            .hair = hair,
+        };
     }
 };
 
@@ -291,7 +394,7 @@ pub const CharacterScreen = struct {
         var custom_writer = CustomWriter{ .writer = writer };
 
         try writer.writeInt(u16, self.error_code, .big);
-        try custom_writer.writeString(self.key[0..]);
+        try custom_writer.writeBytes(self.key[0..]);
         try writer.writeInt(u8, self.character_len, .big);
         for (self.characters) |character| {
             try writer.writeAll(try character.encode());
@@ -299,6 +402,188 @@ pub const CharacterScreen = struct {
         try writer.writeInt(u8, self.pincode, .big);
         try writer.writeInt(u32, self.encryption, .big);
         try writer.writeInt(u32, self.dw_flag, .big);
+
+        return fbs;
+    }
+};
+
+pub const CharacterCreate = struct {
+    name: CompositeString,
+    map: CompositeString,
+    look_size: u16,
+    look: Look,
+
+    pub fn encode(self: CharacterCreate) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        var writer = fbs.writer().any();
+        var custom_writer = CustomWriter{ .writer = writer };
+
+        try custom_writer.writeString(self.name);
+        try custom_writer.writeString(self.map);
+        try writer.writeInt(u16, self.look_size, .big);
+        try writer.writeAll(try self.look.encode());
+
+        return fbs;
+    }
+
+    pub fn decode(fbs: *std.io.FixedBufferStream([]const u8)) !CharacterCreate {
+        var reader = fbs.reader().any();
+        var custom_reader = CustomReader{ .reader = &reader };
+
+        const name = try custom_reader.readString();
+        const map = try custom_reader.readString();
+        const look_size = try reader.readInt(u16, .big);
+        const look = try Look.decode(fbs);
+
+        return CharacterCreate{ .name = name, .map = map, .look_size = look_size, .look = look };
+    }
+};
+
+pub const CharacterCreateReply = struct {
+    error_code: u16,
+
+    pub fn init() CharacterCreateReply {
+        return CharacterCreateReply{ .error_code = 0x0000 };
+    }
+
+    pub fn encode(self: CharacterCreateReply) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        var writer = fbs.writer().any();
+
+        try writer.writeInt(u16, self.error_code, .big);
+
+        return fbs;
+    }
+};
+
+pub const CharacterRemove = struct {
+    name: CompositeString,
+    hash: CompositeString,
+
+    pub fn encode(self: CharacterRemove) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        const writer = fbs.writer().any();
+        var custom_writer = CustomWriter{ .writer = writer };
+
+        try custom_writer.writeString(self.name);
+        try custom_writer.writeString(self.hash);
+
+        return fbs;
+    }
+
+    pub fn decode(data: []const u8) !CharacterRemove {
+        const reader = std.io.fixedBufferStream(data).reader();
+        var custom_reader = CustomReader{ .reader = reader };
+
+        const name = try custom_reader.readString();
+        const hash = try custom_reader.readString();
+
+        return CharacterRemove{ .name = name, .hash = hash };
+    }
+};
+
+pub const CharacterRemoveReply = struct {
+    error_code: u16,
+
+    pub fn init() CharacterRemoveReply {
+        return CharacterRemoveReply{ .error_code = 0x0000 };
+    }
+
+    pub fn encode(self: CharacterRemoveReply) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        var writer = fbs.writer().any();
+
+        try writer.writeInt(u16, self.error_code, .big);
+
+        return fbs;
+    }
+};
+
+pub const CreatePincode = struct {
+    hash: CompositeString,
+
+    pub fn init(hash: []const u8) CreatePincode {
+        return CreatePincode{ .hash = hash };
+    }
+
+    pub fn encode(self: CreatePincode) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        const writer = fbs.writer().any();
+        var custom_writer = CustomWriter{ .writer = writer };
+
+        try custom_writer.writeString(self.hash);
+
+        return fbs;
+    }
+
+    pub fn decode(data: []const u8) !CreatePincode {
+        const reader = std.io.fixedBufferStream(data).reader();
+        var custom_reader = CustomReader{ .reader = reader };
+
+        const hash = try custom_reader.readString();
+
+        return CreatePincode{ .hash = hash };
+    }
+};
+
+pub const CreatePincodeReply = struct {
+    error_code: u16,
+
+    pub fn init() CreatePincodeReply {
+        return CreatePincodeReply{ .error_code = 0x0000 };
+    }
+
+    pub fn encode(self: CreatePincodeReply) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        var writer = fbs.writer().any();
+
+        try writer.writeInt(u16, self.error_code, .big);
+
+        return fbs;
+    }
+};
+
+pub const UpdatePincode = struct {
+    old_hash: CompositeString,
+    hash: CompositeString,
+
+    pub fn encode(self: UpdatePincode) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        const writer = fbs.writer().any();
+        var custom_writer = CustomWriter{ .writer = writer };
+
+        try custom_writer.writeString(self.old_hash);
+        try custom_writer.writeString(self.hash);
+
+        return fbs;
+    }
+
+    pub fn decode(data: []const u8) !UpdatePincode {
+        const reader = std.io.fixedBufferStream(data).reader();
+        var custom_reader = CustomReader{ .reader = reader };
+
+        const old_hash = try custom_reader.readString();
+        const hash = try custom_reader.readString();
+
+        return UpdatePincode{
+            .old_hash = old_hash,
+            .hash = hash,
+        };
+    }
+};
+
+pub const UpdatePincodeReply = struct {
+    error_code: u16,
+
+    pub fn init() UpdatePincodeReply {
+        return UpdatePincodeReply{ .error_code = 0x0000 };
+    }
+
+    pub fn encode(self: UpdatePincodeReply) !fixedBuffer(1024) {
+        var fbs = fixedBuffer(1024).init();
+        var writer = fbs.writer().any();
+
+        try writer.writeInt(u16, self.error_code, .big);
 
         return fbs;
     }
